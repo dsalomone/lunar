@@ -4,23 +4,53 @@
 @author: Rodrigo Senra
 """
 
+import re
+import logging
 from datetime import datetime as dt
 
+MSG_FLAG = '$'
+BOAT_FLAG = 'B'
 
-FORMATS = {
-    'T': (4,   'battery_voltage', lambda x: float("{0}.{1}".format(x[:3], x[3]))),
-    'I': (4,   'input_current',   lambda x: float("{0}.{1}".format(x[:3], x[3]))),
-    'O': (4,   'output_current',  lambda x: float("{0}.{1}".format(x[:3], x[3]))),
-    'A': (8,   'latitude',        lambda x: float("{0}.{1}".format(x[:3], x[3:]))),
-    'G': (8,   'longitude',       lambda x: float("{0}.{1}".format(x[:3], x[3:]))),
-    'H': (6,   'timestamp',       lambda x: dt(year=dt.now().year, month=dt.now().month, day=dt.now().day, \
-                                               hour=int(x[:2]), minute=int(x[2:4]), second=int(x[4:6]))),
-    '$': (140, 'msg',             lambda x: x)
+PROTO = {
+    'V': {"label": 'Tensão da bateria', "unit": "V", "convert": lambda x: float(x)},
+    'I': {"label": 'Corrente de Saída', "unit": "A", "convert": lambda x: float(x)},
+    'G': {"label": 'Corrente de Entrada', "unit": "A", "convert": lambda x: float(x)},
+    'F': {"label": 'Corrente da Bateria', "unit": "A", "convert": lambda x: float(x)},
+    'J': {"label": 'Latitude Inicial', "unit": "", "convert": lambda x: float(x)},
+    't': {"label": 'Intervalo de Amostragem', "unit": "s", "convert": lambda x: int(x)},
+    'K': {"label": 'Longitude Inicial', "unit": "", "convert": lambda x: float(x)},
+    'M': {"label": 'Longitude Final', "unit": "", "convert": lambda x: float(x)},
+    'H': {"label": 'Hora da Embarcação', "unit": "",
+          "convert": lambda x: dt(year=dt.now().year,
+                                  month=dt.now().month,
+                                  day=dt.now().day,
+                                  hour=int(x[:2]),
+                                  minute=int(x[2:4]),
+                                  second=int(x[4:6]))},
+    'T': {"label": 'Temperatura na caixa', "unit": "C", "convert": lambda x: float(x)},
+    'X': {"label": 'Tensão da saída', "unit": "V", "convert": lambda x: float(x)},
+    BOAT_FLAG: {"label": 'Embarcação', "unit": "", "convert": lambda x: x},
+    MSG_FLAG: {"label": 'Último aviso recebido', "unit": "", "convert": lambda x: x},
 }
 
-REC_SIZES = {k: v[0] for k,v in FORMATS.items()}
-REC_NAMES = {k: v[1] for k,v in FORMATS.items()}
-REC_MASKS = {k: v[2] for k,v in FORMATS.items()}
+PATTERN = re.compile(r"(\w[\-\+0-9\:\.]+)")
+
+
+def extract_by_flag(flag, tweet):
+    """
+    Utility function to extract the content that follows the flag in the tweet or None.
+
+    :param flag:  A letter defined in  PROTO that defines a piece of the message.
+    :param tweet: The tweet message as a string.
+    :return: The tweet prefix and the extracted field content that follows the flag (without the flag).
+    """
+    assert(type(tweet) == str)
+    assert(len(tweet) > 0)
+    if flag in tweet:
+        position = tweet.index(flag)
+        return tweet[:position], tweet[position+1:]
+    else:
+        return tweet, None
 
 
 def parse_tweet(tweet):
@@ -29,32 +59,26 @@ def parse_tweet(tweet):
 
     :param tweet: the tweet message
     :return: a dictionary with tweet fields
-
-    >>> parse_tweet('T1235I0023O0015A+2487543G-4256789H123421')
-    {'timestamp': datetime.datetime(2016, 1, 29, 12, 34, 21), 'battery_voltage': 123.5, 'longitude': -42.56789, 'input_current': 2.3, 'latitude': 24.87543, 'output_current': 1.5}
-
-    >>> parse_tweet('T1235$OK TUDO BEM')
-    {'msg': 'OK TUDO BEM', 'battery_voltage': 123.5}
-
     """
 
     record = {}
-    t = tweet[:]
+    prefix, msg = extract_by_flag(MSG_FLAG, tweet)
+    if msg:
+        record[PROTO[MSG_FLAG]] = msg
+    else:
+        prefix, boat_name = extract_by_flag(BOAT_FLAG, tweet)
+        if boat_name:
+            record[PROTO[BOAT_FLAG]] = boat_name
 
-    while t:
-        rec_type = t[0]
-        rec_data = t[1: REC_SIZES[rec_type]+1]
-        record[REC_NAMES[rec_type]] = REC_MASKS[rec_type](rec_data)
-        t = t[REC_SIZES[rec_type]+1:]
+    parts = re.split(PATTERN, prefix)
 
+    try:
+        for part in parts:
+            if not part:
+                continue
+            flag = part[0]
+            msg = part[1:]
+            record[flag] = PROTO[flag]["convert"](msg)
+    except Exception as ex:
+        logging.error("Failed to parse {0:s} with exception {1:s}".format(tweet, ex))
     return record
-
-
-
-def test():
-    import doctest
-    doctest.testmod(verbose=True, exclude_empty=True)
-
-
-if __name__ == '__main__':
-    test()
